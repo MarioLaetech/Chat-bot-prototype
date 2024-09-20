@@ -5,9 +5,9 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer
 # Initialize Flask app
 app = Flask(__name__)
 
-# Load the tokenizer and model
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-model = GPT2LMHeadModel.from_pretrained('gpt2')
+# Load the fine-tuned tokenizer and model
+tokenizer = GPT2Tokenizer.from_pretrained('./fine_tuned_shakespeare_gpt2')
+model = GPT2LMHeadModel.from_pretrained('./fine_tuned_shakespeare_gpt2')
 
 # Check if GPU is available and move the model to GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
