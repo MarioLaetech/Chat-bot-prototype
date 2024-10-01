@@ -1,50 +1,72 @@
+from flask import Flask, render_template, request, redirect, url_for
 import torch
-from transformers import GPT2Tokenizer, GPT2LMHeadModel, Trainer, TrainingArguments
-from datasets import load_dataset
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-# 1. Load your text files into a dataset
-dataset = load_dataset('text', data_files={'train': ['Hamletplay.txt', 'Macbethplay.txt']})
+# Initialize Flask app
+app = Flask(__name__)
 
-# 2. Load pre-trained GPT-2 model and tokenizer
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+# Load the fine-tuned tokenizer and model
+tokenizer = GPT2Tokenizer.from_pretrained('./fine_tuned_shakespeare_gpt2')
+model = GPT2LMHeadModel.from_pretrained('./fine_tuned_shakespeare_gpt2')
 
-# 2.1 Add a pad token to the GPT-2 tokenizer
-tokenizer.pad_token = tokenizer.eos_token  # Use the EOS token as the pad token
+# Check if GPU is available and move the model to GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
 
-# 3. Load pre-trained GPT-2 model and tokenizer
-model = GPT2LMHeadModel.from_pretrained('gpt2')
+# Enable cuDNN benchmark for optimal GPU performance
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
 
-# 4. Tokenize the dataset
-def tokenize_function(examples):
-    tokenized_inputs = tokenizer(examples['text'], truncation=True, padding='max_length', max_length=128)
+# Function to generate a response based on user input
+def generate_text(prompt, max_length=150, temperature=0.9):  # Added temperature as a parameter
+    # Tokenize input and move to the GPU
+    inputs = tokenizer.encode(prompt, return_tensors='pt').to(device)
     
-    # Shift the input tokens to create labels
-    tokenized_inputs["labels"] = tokenized_inputs["input_ids"].copy()
+    # Generate output using the model
+    outputs = model.generate(
+        inputs,
+        max_length=max_length,
+        num_return_sequences=1,
+        no_repeat_ngram_size=3,
+        do_sample=True,
+        top_k=200,
+        top_p=0.85,
+        temperature=temperature  # Added temperature to control randomness
+    ).to(device)  # Ensure output is also moved to GPU
     
-    return tokenized_inputs
+    # Decode the generated output
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-tokenized_datasets = dataset.map(tokenize_function, batched=True, remove_columns=["text"])
+# Store chat history
+chat_history = []
 
-# 5. Set up fine-tuning configurations
-training_args = TrainingArguments(
-    output_dir="./fine_tuned_shakespeare",  # Directory to save the fine-tuned model
-    overwrite_output_dir=True,
-    num_train_epochs=3,                 # Number of epochs for training
-    per_device_train_batch_size=4,      # Adjust this based on your GPU memory
-    save_steps=1000,                    # Save every 1000 steps
-    save_total_limit=2,                 # Only keep the last 2 checkpoints
-)
+# Flask route for the homepage
+@app.route("/", methods=["GET", "POST"])
+def chat():
+    global chat_history
+    
+    if request.method == "POST":
+        user_input = request.form.get("user_input")
+        
+        # If user clicks "Retry" without input, just regenerate the last response
+        if user_input == "":
+            user_input = chat_history[-2]['user']  # Take the last user input
 
-# 6. Initialize the Trainer
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=tokenized_datasets['train'],
-)
+        # Generate the model's response
+        model_response = generate_text(user_input)
 
-# 7. Train the model
-trainer.train()
+        # Update chat history
+        chat_history.append({"user": user_input, "bot": model_response})
 
-# 8. Save the fine-tuned model and tokenizer
-model.save_pretrained("./fine_tuned_shakespeare_gpt2")
-tokenizer.save_pretrained("./fine_tuned_shakespeare_gpt2")
+    return render_template("chat.html", chat_history=chat_history)
+
+# Route to reset chat history
+@app.route("/reset")
+def reset():
+    global chat_history
+    chat_history = []
+    return redirect(url_for('chat'))
+
+# Run the Flask app
+if __name__ == "__main__":
+    app.run(debug=True)
